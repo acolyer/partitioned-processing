@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+require 'colorize'
+
+puts "Captured Orders are in yellow".colorize(:yellow)
+puts "Orders processed in Corporate HQ (Amazon US East) are in blue".colorize(:blue)
+puts "Orders processed in  Ireland (Amazon EU West) are in green".colorize(:green)
+
+ARGF.each do |line|
+  if line =~ /Sent.*/ 
+    print line.colorize( :yellow )
+  elsif line =~ /Processing.*in Corporate HQ*/ 
+    print line.colorize( :blue )
+  elsif line =~ /Processing.*in Amazon*/ 
+    print line.colorize( :green )
+  else
+    puts line
+  end
+end

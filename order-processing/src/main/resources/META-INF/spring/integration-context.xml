@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:c="http://www.springframework.org/schema/c"
+	xmlns:int="http://www.springframework.org/schema/integration"
+	xmlns:int-amqp="http://www.springframework.org/schema/integration/amqp"
+	xmlns:rabbit="http://www.springframework.org/schema/rabbit"
+	xmlns:context="http://www.springframework.org/schema/context"
+	xsi:schemaLocation="http://www.springframework.org/schema/integration/amqp http://www.springframework.org/schema/integration/amqp/spring-integration-amqp.xsd
+		http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd
+		http://www.springframework.org/schema/rabbit http://www.springframework.org/schema/rabbit/spring-rabbit.xsd
+		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+		http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd">
+
+	<context:property-placeholder location="META-INF/spring/config.properties"/>
+
+	<rabbit:connection-factory id="connectionFactory"
+		host="#{systemProperties['AMQP_HOSTNAME']}"
+		port="${rabbit.port}"
+		username="${rabbit.username}"
+		password="${rabbit.password}"
+		virtual-host="orders-broker"/>
+		
+    <rabbit:template id="amqpTemplate" connection-factory="connectionFactory" />
+    <rabbit:admin connection-factory="connectionFactory" />
+
+	<!-- Configuration for the in-house data center, containing order capture and order processing components -->
+	<!-- ==================================================================================================== -->
+
+	<beans profile="hq">
+
+		<!-- Orders are captured in the main data center, and placed onto a work queue for processing -->
+
+		<bean id="orderCapture" class="org.springsource.samples.cloudburst.OrderCapture"/>
+
+	    <int:inbound-channel-adapter ref="orderCapture" method="placeOrder" channel="toOrdersExchange">
+			<int:poller fixed-rate="1000"/>
+		</int:inbound-channel-adapter>
+
+	    <int:channel id="toOrdersExchange" />
+
+	    <int-amqp:outbound-channel-adapter channel="toOrdersExchange"
+			amqp-template="amqpTemplate" exchange-name="orders.exchange"/>
+
+		<!-- this is the main exchange, by dynamically controlling what is bound to it, we can
+		     route order processing to a location of our choice -->
+		<rabbit:direct-exchange name="orders.exchange">
+			<!-- initially there are no bindings, so all messages will be routed via
+			     the alternate exchange -->
+			<rabbit:exchange-arguments>
+				<entry key="alternate-exchange" value="orders.exchange.local"/>
+			</rabbit:exchange-arguments>
+		</rabbit:direct-exchange>
+		
+		<!-- this exchange is used to process orders locally when no cloudburst exchange
+		     has been bound -->
+		<rabbit:direct-exchange name="orders.exchange.local">
+			<rabbit:bindings>
+				<rabbit:binding queue="orders"/>
+			</rabbit:bindings>
+		</rabbit:direct-exchange>
+		
+		<!-- this exchange is upstream of the Amazon Ireland broker...-->
+		<rabbit:fanout-exchange name="orders.exchange.amazon.eu.west">
+			<rabbit:bindings>
+				<!-- locally log anything that leaves HQ... -->
+				<rabbit:binding queue="remote.orders.log"/>
+			</rabbit:bindings>
+		</rabbit:fanout-exchange>
+		
+		<!-- local orders queue which will be serviced by in-house workers -->
+		<rabbit:queue name="orders"/>
+		
+		<!-- queue for logging of orders which are sent to cloud-burst location for processing -->
+		<rabbit:queue name="remote.orders.log"/>
+		
+		<!-- worker for processing orders -->
+		<bean id="orderProcessor" class="org.springsource.samples.cloudburst.OrderProcessor"
+			c:location="Corporate HQ"/>
+				
+		<!-- auditor for orders sent to cloud for processing -->
+		<bean id="remoteOrderAudit" class="org.springsource.samples.cloudburst.RemoteOrderAuditor"/>
+		
+		<!-- dispatch messages for processing-->
+	    <rabbit:listener-container connection-factory="connectionFactory"
+			prefetch="5">
+			<rabbit:listener queues="orders" ref="orderProcessor" method="processOrder"/>
+			<rabbit:listener queues="remote.orders.log" ref="remoteOrderAudit" method="auditOrder"/>
+	    </rabbit:listener-container>		
+		
+	</beans>
+
+	<!-- Configuration for the cloud burst location, containing order processing components only -->
+	<!-- ==================================================================================================== -->
+	
+	<beans profile="cloudburst">
+
+		<!-- federated exchange fed by the main orders exchange back in HQ -->
+		<rabbit:federated-exchange name="orders.exchange.local"
+			backing-type="fanout"
+			upstream-set="corporateHQ">
+			<rabbit:fanout-bindings>
+				<rabbit:binding queue="orders"/>
+			</rabbit:fanout-bindings>
+		</rabbit:federated-exchange>
+		
+		<!-- queue for processing orders in the cloud -->
+		<rabbit:queue name="orders"/>
+
+		<!-- worker for processing orders -->
+		<bean id="orderProcessor" class="org.springsource.samples.cloudburst.OrderProcessor"
+			c:location="Amazon EU West (Ireland)"/>
+
+		<!-- listen for messages on orders queue and send to orderProcessor -->
+	    <rabbit:listener-container connection-factory="connectionFactory"
+			prefetch="5">
+		    <rabbit:listener queues="orders" ref="orderProcessor"
+			    method="processOrder"/>
+	    </rabbit:listener-container>		
+	
+	</beans>
+	
+	
+</beans>
