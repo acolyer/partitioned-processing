@@ -6,8 +6,10 @@ puts "Orders processed in Corporate HQ (Amazon US East) are in blue".colorize(:b
 puts "Orders processed in  Ireland (Amazon EU West) are in green".colorize(:green)
 
 ARGF.each do |line|
-  if line =~ /Sent.*/ 
+  if line =~ /Sent order.*/ 
     print line.colorize( :yellow )
+  elsif line =~ /Shipped.*/
+    print line.colorize( :light_white)
   elsif line =~ /Processing.*in Corporate HQ*/ 
     print line.colorize( :blue )
   elsif line =~ /Processing.*in Amazon*/ 
